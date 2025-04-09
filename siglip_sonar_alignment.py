@@ -18,37 +18,201 @@ from datetime import datetime
 
 
 
-
-
 class SIGLIPSOLCMAligner(nn.Module):
     def __init__(self, 
-                 visual_dim=1024,  
-                 sonar_dim=1024,   
-                 projection_dim=1024,
-                 temperature=0.07):
+                 visual_dim=768,        
+                 sonar_dim=1024,        
+                 projection_dim=1024,   
+                 hidden_dim=1536,       
+                 num_heads=8,          
+                 dropout=0.1,          
+                 num_layers=2,         
+                 temperature=0.07):    
         
         super().__init__()
         
         self.visual_projector = nn.Sequential(
-            nn.Linear(visual_dim, projection_dim),
-            nn.GELU(),  
+            nn.Linear(visual_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, projection_dim),
+            nn.LayerNorm(projection_dim)
+        )
+        
+        self.refinement_blocks = nn.ModuleList([
+            RefinementBlock(
+                dim=projection_dim,
+                sonar_dim=sonar_dim,
+                num_heads=num_heads,
+                dropout=dropout
+            ) for _ in range(num_layers)
+        ])
+        
+        self.final_projection = nn.Sequential(
+            nn.Linear(projection_dim, projection_dim),
             nn.LayerNorm(projection_dim)
         )
         
         self.temperature = nn.Parameter(torch.tensor(temperature))
+        
+        self.apply(self._init_weights)
+    
+    def _init_weights(self, module):
+        """Initialize weights with small values for stable training"""
+        if isinstance(module, nn.Linear):
+            torch.nn.init.kaiming_normal_(module.weight, a=0.1, mode='fan_in', nonlinearity='leaky_relu')
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):
+            torch.nn.init.ones_(module.weight)
+            torch.nn.init.zeros_(module.bias)
     
     def forward(self, 
                 visual_embeddings: torch.Tensor, 
                 sonar_embeddings: torch.Tensor):
- 
-        projected_visual = self.visual_projector(visual_embeddings)
-
+       
         if sonar_embeddings.dim() > 2:
-            sonar_embeddings = sonar_embeddings.squeeze(1)  
+            sonar_embeddings = sonar_embeddings.squeeze(1)
+        
+        visual_features = self.visual_projector(visual_embeddings)
+        
+        for block in self.refinement_blocks:
+            visual_features = block(visual_features, sonar_embeddings)
+        
+        projected_visual = self.final_projection(visual_features)
+        
         visual_norm = nn.functional.normalize(projected_visual, p=2, dim=1)
         sonar_norm = nn.functional.normalize(sonar_embeddings, p=2, dim=1)
         
         return projected_visual, (visual_norm, sonar_norm)
+    
+    def encode_image(self, visual_embeddings):
+        """
+        Encode only an image to SONAR space for inference
+        """
+        visual_features = self.visual_projector(visual_embeddings)
+        
+
+        for block in self.refinement_blocks:
+            visual_features = block.forward_image_only(visual_features)
+        
+        projected_visual = self.final_projection(visual_features)
+        
+        return nn.functional.normalize(projected_visual, p=2, dim=1)
+    
+    def encode_text(self, sonar_embeddings):
+        """
+        Process SONAR text embeddings for similarity matching
+        """
+        if sonar_embeddings.dim() > 2:
+            sonar_embeddings = sonar_embeddings.squeeze(1)
+        
+        return nn.functional.normalize(sonar_embeddings, p=2, dim=1)
+    
+    def similarity(self, visual_embeddings, sonar_embeddings):
+        """
+        Compute similarity between visual and SONAR embeddings
+        """
+        visual_norm = self.encode_image(visual_embeddings)
+        sonar_norm = self.encode_text(sonar_embeddings)
+        
+        similarity = torch.matmul(visual_norm, sonar_norm.t()) / self.temperature
+        
+        return similarity
+
+
+class RefinementBlock(nn.Module):
+    """
+    Cross-modal attention and self-attention
+    for alignment 
+    """
+    def __init__(self, dim, sonar_dim, num_heads=8, dropout=0.1):
+        super().__init__()
+        
+        self.visual_query = nn.Linear(dim, dim)
+        self.sonar_key = nn.Linear(sonar_dim, dim)
+        self.sonar_value = nn.Linear(sonar_dim, dim)
+        
+        self.cross_attention = nn.MultiheadAttention(
+            embed_dim=dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+        
+        self.norm1 = nn.LayerNorm(dim)
+        
+        self.self_attention = nn.MultiheadAttention(
+            embed_dim=dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+        
+        self.norm2 = nn.LayerNorm(dim)
+        
+        self.ffn = nn.Sequential(
+            nn.Linear(dim, dim * 4),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(dim * 4, dim),
+            nn.Dropout(dropout)
+        )
+        
+        self.norm3 = nn.LayerNorm(dim)
+        
+        self.gate = nn.Sequential(
+            nn.Linear(dim * 2, dim),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, visual_features, sonar_embeddings):
+        visual_query = self.visual_query(visual_features).unsqueeze(1)
+        sonar_key = self.sonar_key(sonar_embeddings).unsqueeze(1)
+        sonar_value = self.sonar_value(sonar_embeddings).unsqueeze(1)
+        
+        cross_attn_output, _ = self.cross_attention(
+            query=visual_query,
+            key=sonar_key,
+            value=sonar_value
+        )
+        cross_attn_output = cross_attn_output.squeeze(1)
+        visual_enhanced = self.norm1(visual_features + cross_attn_output)
+        
+        visual_seq = visual_enhanced.unsqueeze(1)
+        self_attn_output, _ = self.self_attention(
+            query=visual_seq,
+            key=visual_seq,
+            value=visual_seq
+        )
+        self_attn_output = self_attn_output.squeeze(1)
+        
+        visual_refined = self.norm2(visual_enhanced + self_attn_output)
+        
+        ffn_output = self.ffn(visual_refined)
+        
+        visual_output = self.norm3(visual_refined + ffn_output)
+        gate_input = torch.cat([visual_features, visual_output], dim=1)
+        gate_value = self.gate(gate_input)
+        gated_output = gate_value * visual_output + (1 - gate_value) * visual_features
+        
+        return gated_output
+    
+    def forward_image_only(self, visual_features):
+        visual_seq = visual_features.unsqueeze(1)
+        self_attn_output, _ = self.self_attention(
+            query=visual_seq,
+            key=visual_seq,
+            value=visual_seq
+        )
+        self_attn_output = self_attn_output.squeeze(1)
+        
+        visual_refined = self.norm2(visual_features + self_attn_output)
+        
+        ffn_output = self.ffn(visual_refined)
+        visual_output = self.norm3(visual_refined + ffn_output)
+        
+        return visual_output
 
 
 class StreamingCC12MDataset(torch.utils.data.IterableDataset):
@@ -223,7 +387,6 @@ class SIGLIPSOLCMTrainer:
                 wandb.log({
                     "batch_loss": loss.item(),
                     "temperature": self.model.temperature.item(),
-                    "batch": batch_count + epoch * len(self.train_loader),
                     "learning_rate": self.optimizer.param_groups[0]['lr']
                 })
         
@@ -317,8 +480,6 @@ class SIGLIPSOLCMTrainer:
 
 
 
-
-
 def load_cc12m_dataset(streaming=True):
     dataset = load_dataset("pixparse/cc12m-wds", streaming=streaming)
     return dataset
@@ -376,7 +537,7 @@ def main():
         'visual_dim': 768,  # SigLIP2 vision dimension
         'sonar_dim': 1024,
         'projection_dim': 1024,
-        'batch_size': 16,
+        'batch_size': 512,
         'learning_rate': 1e-4,
         'weight_decay': 0.01,
         'num_epochs': 10,
