@@ -26,6 +26,11 @@ from sciagent.utils.models import (
     ScientificAnalysis,
     DatasetRequirements,
 )
+from sciagent.mcp.client import MCPClient, create_default_mcp_client
+from sciagent.project.knowledge_graph import ScientificKnowledgeGraph
+from sciagent.advanced.mcts import MCTSPlanner
+from sciagent.advanced.bayesian_design import BayesianExperimentSelector, ExperimentCandidate
+from sciagent.advanced.thompson_sampling import ThompsonSamplingExplorer
 
 
 class ScienceAgent(BaseAgent):
@@ -56,6 +61,20 @@ class ScienceAgent(BaseAgent):
             config.science_agent.model or "gemini-2.0-flash-thinking-exp"
         )
 
+        # Initialize MCP client for literature search
+        self.mcp_client = create_default_mcp_client()
+
+        # Initialize knowledge graph
+        self.knowledge_graph = ScientificKnowledgeGraph(config.cache_dir / "knowledge")
+
+        # Initialize advanced components
+        self.hypothesis_explorer = ThompsonSamplingExplorer()
+        self.experiment_planner = MCTSPlanner(
+            exploration_constant=config.mcts_exploration_constant,
+            n_simulations=config.mcts_simulations,
+        )
+        self.bayesian_selector = BayesianExperimentSelector()
+
     async def process(self, request: Dict[str, Any]) -> Any:
         """
         Process a request
@@ -82,12 +101,16 @@ class ScienceAgent(BaseAgent):
         else:
             raise ValueError(f"Unknown action: {action}")
 
-    async def plan_experiments(self, query: str) -> ExperimentPlanning:
+    async def plan_experiments(
+        self, query: str, budget: float = 10000, max_hypotheses: int = 5
+    ) -> ExperimentPlanning:
         """
-        Multi-stage experiment planning
+        Multi-stage experiment planning with advanced techniques
 
         Args:
             query: Research question
+            budget: Available budget
+            max_hypotheses: Maximum hypotheses to consider
 
         Returns:
             Complete experiment planning
@@ -95,39 +118,77 @@ class ScienceAgent(BaseAgent):
 
         self.logger.info(f"Planning experiments for: {query}")
 
-        # Stage 1: Generate hypotheses
-        hypotheses = await self._generate_hypotheses(query)
+        # Stage 1: Literature search via MCP
+        self.logger.info("Searching scientific literature via MCP...")
+        papers = await self._search_literature(query)
 
-        # Stage 2: Design experiments for top hypothesis
-        hypothesis = hypotheses[0]  # Take best hypothesis
-        design = await self._design_experiment(query, hypothesis)
-
-        # Stage 3: Create experiment sequence (simplified MCTS)
-        sequence = ExperimentSequence(
-            steps=[design],
-            total_value=0.8,
-            expected_cost=1000.0,
-            expected_duration=3600.0,
+        # Stage 2: Hypothesis generation with Thompson Sampling
+        self.logger.info("Exploring hypothesis space with Thompson Sampling...")
+        hypotheses_with_stats = await self.hypothesis_explorer.explore(
+            query=query, papers=papers, n_iterations=20
         )
 
-        # Stage 4: Check if dataset is needed
-        requires_dataset, dataset_req = await self._check_dataset_requirements(design)
+        # Extract top hypotheses
+        top_hypotheses = [
+            h.hypothesis for h in hypotheses_with_stats[:max_hypotheses]
+        ]
 
-        plan = ExperimentPlan(
-            hypothesis=hypothesis,
-            design=design,
-            sequence=sequence,
-            expected_value=0.8,
-            requires_dataset=requires_dataset,
-            dataset_requirements=dataset_req,
+        # Stage 3: For each hypothesis, design experiments and use MCTS to plan sequence
+        self.logger.info("Planning experiment sequences with MCTS...")
+        experiment_plans = []
+
+        for hypothesis in top_hypotheses:
+            # Design initial experiment
+            design = await self._design_experiment(query, hypothesis)
+
+            # Use MCTS to plan optimal experiment sequence
+            if self.config.enable_mcts:
+                sequence = await self.experiment_planner.plan(
+                    hypothesis=hypothesis, initial_design=design, budget=budget
+                )
+            else:
+                # Fallback to simple sequence
+                sequence = ExperimentSequence(
+                    steps=[design],
+                    total_value=0.8,
+                    expected_cost=1000.0,
+                    expected_duration=3600.0,
+                )
+
+            # Check if dataset is needed
+            requires_dataset, dataset_req = await self._check_dataset_requirements(
+                design
+            )
+
+            plan = ExperimentPlan(
+                hypothesis=hypothesis,
+                design=design,
+                sequence=sequence,
+                expected_value=sequence.total_value,
+                requires_dataset=requires_dataset,
+                dataset_requirements=dataset_req,
+            )
+
+            experiment_plans.append(plan)
+
+        # Rank by expected value
+        ranked_plans = sorted(
+            experiment_plans, key=lambda p: p.expected_value, reverse=True
         )
+
+        # Update knowledge graph
+        await self.knowledge_graph.add_papers(papers)
+        for plan in ranked_plans:
+            self.knowledge_graph.add_hypothesis(
+                plan.hypothesis, related_papers=[p.id for p in papers[:3]]
+            )
 
         return ExperimentPlanning(
             query=query,
-            papers=[],  # Papers from literature search (simplified)
-            hypotheses=hypotheses,
-            plans=[plan],
-            recommendation=plan,
+            papers=papers,
+            hypotheses=top_hypotheses,
+            plans=ranked_plans,
+            recommendation=ranked_plans[0],
         )
 
     async def _generate_hypotheses(self, query: str) -> List[Hypothesis]:
@@ -248,7 +309,7 @@ Provide a comprehensive scientific analysis."""
         self, query: str, planning: ExperimentPlanning, results: Any, analysis: ScientificAnalysis
     ) -> List[Refinement]:
         """
-        Propose experiment refinements based on results
+        Propose experiment refinements using Bayesian experimental design
 
         Args:
             query: Original query
@@ -257,10 +318,34 @@ Provide a comprehensive scientific analysis."""
             analysis: Analysis of results
 
         Returns:
-            List of proposed refinements
+            List of proposed refinements ranked by expected information gain
         """
 
-        prompt = f"""Based on these experimental results, propose refinements:
+        self.logger.info("Proposing refinements using Bayesian experimental design...")
+
+        # Generate candidate refinements
+        candidates = await self._generate_refinement_candidates(
+            planning, results, analysis
+        )
+
+        # Select best refinements using Bayesian information gain
+        if self.config.enable_bayesian_design:
+            selected = await self.bayesian_selector.select_experiments(
+                candidates=candidates, prior_results=[results], max_select=3
+            )
+
+            refinements = [
+                Refinement(
+                    description=exp.description,
+                    rationale=exp.information_gain_explanation,
+                    expected_information_gain=exp.expected_information_gain,
+                    cost=exp.expected_cost,
+                )
+                for exp in selected
+            ]
+        else:
+            # Fallback to simple parsing
+            prompt = f"""Based on these experimental results, propose refinements:
 
 Original Query: {query}
 Hypothesis: {planning.recommendation.hypothesis.statement}
@@ -278,10 +363,160 @@ Consider:
 
 Propose 3 refinements ranked by expected information gain."""
 
-        response = await self._generate_with_thinking(prompt)
-        refinements = self._parse_refinements(response)
+            response = await self._generate_with_thinking(prompt)
+            refinements = self._parse_refinements(response)
 
         return refinements
+
+    async def _search_literature(self, query: str) -> List[Paper]:
+        """
+        Search scientific literature via MCP
+
+        Args:
+            query: Search query
+
+        Returns:
+            List of relevant papers
+        """
+        try:
+            # Initialize MCP client if needed
+            if not self.mcp_client.initialized:
+                await self.mcp_client.initialize()
+
+            # Search via MCP (tries multiple sources)
+            papers = []
+
+            # Try arXiv
+            try:
+                arxiv_results = await self.mcp_client.call_tool(
+                    server="arxiv",
+                    tool="search_papers",
+                    arguments={"query": query, "limit": 10},
+                )
+
+                for result in arxiv_results:
+                    paper = Paper(
+                        id=result.get("id", ""),
+                        title=result.get("title", ""),
+                        authors=result.get("authors", []),
+                        abstract=result.get("abstract", ""),
+                        url=result.get("url", ""),
+                        year=result.get("year", 2024),
+                        citations=result.get("citations", 0),
+                    )
+                    papers.append(paper)
+
+            except Exception as e:
+                self.logger.warning(f"arXiv search failed: {e}")
+
+            # Try scholarly database
+            try:
+                scholarly_results = await self.mcp_client.call_tool(
+                    server="scholarly",
+                    tool="search_papers",
+                    arguments={"query": query, "limit": 10},
+                )
+
+                for result in scholarly_results:
+                    paper = Paper(
+                        id=result.get("id", result.get("title", "")[:20]),
+                        title=result.get("title", ""),
+                        authors=result.get("authors", []),
+                        abstract=result.get("abstract", ""),
+                        url=result.get("url", ""),
+                        year=result.get("year", 2024),
+                        citations=result.get("citations", 0),
+                    )
+                    papers.append(paper)
+
+            except Exception as e:
+                self.logger.warning(f"Scholarly search failed: {e}")
+
+            self.logger.info(f"Found {len(papers)} papers via MCP")
+
+            # Also check knowledge graph for related papers
+            kg_papers = self.knowledge_graph.query_related_papers(query, limit=5)
+            self.logger.info(f"Found {len(kg_papers)} related papers in knowledge graph")
+
+            return papers if papers else self._get_fallback_papers(query)
+
+        except Exception as e:
+            self.logger.error(f"Literature search failed: {e}")
+            return self._get_fallback_papers(query)
+
+    def _get_fallback_papers(self, query: str) -> List[Paper]:
+        """Get fallback papers when MCP search fails"""
+        # Return simulated papers as fallback
+        return [
+            Paper(
+                id="fallback_001",
+                title=f"Research on {query}",
+                authors=["Researcher, A.", "Scientist, B."],
+                abstract=f"This paper investigates {query}...",
+                url="https://example.com/paper1",
+                year=2024,
+                citations=50,
+            )
+        ]
+
+    async def _generate_refinement_candidates(
+        self, planning: ExperimentPlanning, results: Any, analysis: ScientificAnalysis
+    ) -> List[ExperimentCandidate]:
+        """
+        Generate candidate refinements
+
+        Args:
+            planning: Original planning
+            results: Results
+            analysis: Analysis
+
+        Returns:
+            List of experiment candidates
+        """
+        candidates = []
+
+        # Candidate 1: Increase sample size
+        candidates.append(
+            ExperimentCandidate(
+                description="Increase sample size for better statistical power",
+                parameters={"sample_size": planning.recommendation.design.sample_size * 2},
+                uncertainty=0.7,
+                expected_cost=500.0,
+            )
+        )
+
+        # Candidate 2: Test different hyperparameters
+        candidates.append(
+            ExperimentCandidate(
+                description="Test with different hyperparameters",
+                parameters={"learning_rate": 0.001, "batch_size": 64},
+                uncertainty=0.8,
+                expected_cost=300.0,
+            )
+        )
+
+        # Candidate 3: Validate on different dataset
+        candidates.append(
+            ExperimentCandidate(
+                description="Validate on different dataset",
+                parameters={"dataset": "alternative_dataset"},
+                uncertainty=0.9,
+                expected_cost=400.0,
+            )
+        )
+
+        # Candidate 4: Test alternative hypothesis
+        if len(planning.hypotheses) > 1:
+            candidates.append(
+                ExperimentCandidate(
+                    description=f"Test alternative hypothesis: {planning.hypotheses[1].statement}",
+                    parameters={"hypothesis_id": 1},
+                    uncertainty=0.85,
+                    expected_cost=600.0,
+                )
+            )
+
+        return candidates
 
     async def _generate_with_thinking(self, prompt: str) -> str:
         """Generate response with extended thinking if enabled"""

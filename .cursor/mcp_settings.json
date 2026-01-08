@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "arxiv": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-arxiv"],
+      "description": "Search arXiv for scientific papers"
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "${workspaceFolder}"],
+      "description": "Access project files"
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "${env:GITHUB_TOKEN}"
+      },
+      "description": "Search GitHub code and repos"
+    },
+    "web": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "${env:BRAVE_API_KEY}"
+      },
+      "description": "Web search for recent information"
+    }
+  }
+}

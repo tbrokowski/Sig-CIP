@@ -18,8 +18,12 @@ SciAgent is a production-ready system that combines cutting-edge AI techniques f
 ### Advanced AI Techniques
 - **Extended Thinking**: Deep reasoning for complex scientific questions
 - **Reflexion**: Self-critique and iterative code improvement
+- **MCTS Planning**: Monte Carlo Tree Search for optimal experiment sequences
+- **Bayesian Design**: Expected Information Gain for experiment selection
+- **Thompson Sampling**: Efficient hypothesis space exploration
+- **Knowledge Graph**: NetworkX-based scientific knowledge management
+- **MCP Integration**: Model Context Protocol for literature search and tools
 - **Constitutional AI**: Validation against scientific principles
-- **Multi-Agent Debate**: Consensus-building through agent discussions
 
 ### Human-in-the-Loop
 - **Interactive Mode**: Approve each step of the experiment
@@ -392,6 +396,139 @@ Contributions are welcome! Please:
 
 MIT License - see [LICENSE](LICENSE) file for details.
 
+## 🚀 Advanced Features
+
+### Knowledge Graph
+
+Store and query scientific knowledge:
+
+```python
+from sciagent.project.knowledge_graph import ScientificKnowledgeGraph
+
+kg = ScientificKnowledgeGraph()
+
+# Query related papers
+papers = kg.query_related_papers("dropout regularization", limit=10)
+
+# Get statistics
+stats = kg.get_statistics()
+
+# Visualize
+kg.visualize("knowledge_graph.png")
+
+# Export/Import
+kg.export_to_json("kg_export.json")
+```
+
+### MCTS Experiment Planning
+
+Plan optimal sequences of experiments:
+
+```python
+from sciagent.advanced import MCTSPlanner
+
+planner = MCTSPlanner(n_simulations=100, max_depth=5)
+
+sequence = await planner.plan(
+    hypothesis=hypothesis,
+    initial_design=design,
+    budget=5000
+)
+
+print(f"Planned {len(sequence.steps)} experiments")
+print(f"Expected value: {sequence.total_value:.2f}")
+```
+
+### Bayesian Experimental Design
+
+Select experiments that maximize information gain:
+
+```python
+from sciagent.advanced import BayesianExperimentSelector, ExperimentCandidate
+
+selector = BayesianExperimentSelector()
+
+candidates = [
+    ExperimentCandidate(
+        description="Increase sample size",
+        parameters={"n": 2000},
+        uncertainty=0.8,
+        expected_cost=500.0
+    ),
+    # ... more candidates
+]
+
+selected = await selector.select_experiments(
+    candidates=candidates,
+    prior_results=[],
+    max_select=3
+)
+```
+
+### Thompson Sampling
+
+Efficiently explore hypothesis space:
+
+```python
+from sciagent.advanced import ThompsonSamplingExplorer
+
+explorer = ThompsonSamplingExplorer()
+
+hypotheses = await explorer.explore(
+    query="attention mechanisms",
+    papers=papers,
+    n_iterations=20
+)
+
+# Get best hypotheses
+best = explorer.get_best_hypotheses(n=5)
+```
+
+### MCP Integration
+
+Access external tools and knowledge:
+
+```python
+from sciagent.mcp import create_default_mcp_client
+
+mcp_client = create_default_mcp_client()
+await mcp_client.initialize()
+
+# Search arXiv
+papers = await mcp_client.call_tool(
+    server="arxiv",
+    tool="search_papers",
+    arguments={"query": "transformer attention", "limit": 10}
+)
+```
+
+## 💻 Cursor Integration
+
+SciAgent works seamlessly with Cursor IDE and Claude Code:
+
+### Setup
+
+1. Open project in Cursor
+2. MCP servers are auto-configured via `.cursor/mcp_settings.json`
+3. Use `.cursorrules` for Claude Code context
+
+### Usage
+
+Ask Claude Code in Cursor:
+
+```
+"Create an experiment that uses Thompson sampling to explore
+hypotheses about batch normalization, then uses MCTS to plan
+the optimal sequence of experiments"
+```
+
+Claude Code will:
+- Understand SciAgent architecture
+- Generate code using appropriate components
+- Follow project patterns
+
+See [docs/CURSOR_SETUP.md](docs/CURSOR_SETUP.md) for detailed guide.
+
 ## 🙏 Acknowledgments
 
 SciAgent builds on cutting-edge research:
@@ -399,8 +536,10 @@ SciAgent builds on cutting-edge research:
 - **Reflexion**: Self-Improvement through Verbal Reinforcement Learning
 - **Constitutional AI**: Training Language Models to Follow Principles
 - **Extended Thinking**: Gemini's Deep Reasoning Capabilities
-- **FunSearch**: Evolutionary Code Optimization
 - **MCTS**: Monte Carlo Tree Search for Planning
+- **Bayesian Optimization**: Expected Information Gain for Experimental Design
+- **Thompson Sampling**: Bayesian Bandit Algorithms
+- **Model Context Protocol**: Anthropic's MCP for tool integration
 
 ## 📬 Contact
 
@@ -409,14 +548,19 @@ SciAgent builds on cutting-edge research:
 
 ## 🗺️ Roadmap
 
+- [x] ✅ MCTS planning
+- [x] ✅ Bayesian experimental design
+- [x] ✅ Thompson sampling
+- [x] ✅ Knowledge graph
+- [x] ✅ MCP integration
+- [x] ✅ Cursor integration
 - [ ] Web interface
 - [ ] More dataset handlers
-- [ ] FunSearch evolution
-- [ ] MCTS planning
-- [ ] Bayesian experimental design
+- [ ] FunSearch evolution (in progress)
 - [ ] Multi-modal support
 - [ ] Cloud deployment
 - [ ] Collaboration features
+- [ ] RAG integration for documents
 
 ## ⭐ Star History
 

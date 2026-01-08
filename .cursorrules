@@ -1,0 +1,112 @@
+# Cursor Rules for SciAgent
+
+## Project Context
+
+SciAgent is an advanced multi-agent scientific and software development system that combines:
+- Gemini (Science Agent) - hypothesis generation, experimental design, analysis
+- Claude (Coding Agent) - code generation with Reflexion self-improvement
+- GPT-4 (Overseer Agent) - validation and quality assurance
+- Automated Data Agent - dataset management
+
+## Code Style
+
+- Python 3.10+ with type hints
+- Async/await for concurrent operations
+- Dataclasses for models
+- Rich logging with structured messages
+- Comprehensive error handling
+
+## Key Architecture Patterns
+
+1. **Agent-Based**: Each agent is independent with a `process()` method
+2. **Coordinator Pattern**: Central orchestrator manages agent workflows
+3. **Human-in-the-Loop**: User approval requests at critical points
+4. **Knowledge Graph**: NetworkX-based scientific knowledge storage
+5. **Advanced Planning**: MCTS for experiment sequences, Bayesian design for selection
+
+## Development Guidelines
+
+### When Adding New Features
+
+1. Create appropriate dataclasses in `src/sciagent/utils/models.py`
+2. Add agent methods that use async/await
+3. Update coordinator if workflow changes
+4. Add logging at INFO level for major steps, DEBUG for details
+5. Handle errors gracefully with try/except and user-friendly messages
+
+### When Working with Agents
+
+- Science Agent: Uses Gemini with extended thinking, accesses MCP for literature, uses Thompson sampling for hypotheses
+- Coding Agent: Uses Claude with Reflexion loops for self-improvement
+- Data Agent: Handles CIFAR, MNIST, ImageNet, COCO automatically
+- Overseer Agent: Uses GPT-4 for constitutional AI validation
+
+### Code Patterns to Follow
+
+```python
+# Logging
+self.logger.info("High-level operation starting...")
+self.logger.debug(f"Details: {variable}")
+
+# Async agent calls
+result = await self.agents["science"].process({
+    "action": "plan_experiments",
+    "query": query
+})
+
+# Human approval
+if not auto_approve and self.user_callback:
+    approved = await self._request_user_approval(
+        message="Ready to proceed?",
+        context={"step": "data_prep"}
+    )
+```
+
+## Testing
+
+- Use pytest with pytest-asyncio
+- Test each agent independently
+- Mock MCP calls in tests
+- Test human-in-the-loop flows with synthetic approvals
+
+## Common Tasks
+
+### Adding a New Agent
+
+1. Create `src/sciagent/agents/new_agent.py` inheriting from `BaseAgent`
+2. Implement `async def process(self, request: Dict) -> Any`
+3. Add to coordinator's agent registry
+4. Update workflows to use new agent
+
+### Adding MCP Integration
+
+1. Define server in `MCPServerConfig`
+2. Add tool handlers in `MCPClient._execute_tool()`
+3. Call via `await mcp_client.call_tool(server, tool, args)`
+
+### Adding Advanced Techniques
+
+1. Create module in `src/sciagent/advanced/`
+2. Integrate into relevant agent (Science/Coding)
+3. Add config flags to enable/disable
+4. Update examples to demonstrate
+
+## Import Order
+
+1. Standard library
+2. Third-party (numpy, torch, etc.)
+3. SciAgent utils (config, logging, models)
+4. SciAgent components (agents, coordinator, etc.)
+
+## Error Handling
+
+Always catch and log errors, then decide:
+- Retry with exponential backoff?
+- Ask user for guidance?
+- Fail gracefully with informative message?
+
+## Documentation
+
+- Docstrings for all public methods
+- Type hints for all parameters and returns
+- Examples in docstrings for complex functions
