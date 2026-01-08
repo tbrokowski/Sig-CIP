@@ -14,10 +14,12 @@ SciAgent is a production-ready system that combines cutting-edge AI techniques f
 - **Coding Agent (Claude)**: Code generation with Reflexion-based self-improvement and debugging
 - **Data Agent**: Automated dataset downloading and preprocessing
 - **Overseer Agent (GPT-4)**: Multi-perspective validation and quality assurance
+- **RAG Agent**: Retrieval-augmented generation with document and graph-based search
 
 ### Advanced AI Techniques
 - **Extended Thinking**: Deep reasoning for complex scientific questions
 - **Reflexion**: Self-critique and iterative code improvement
+- **RAG & Graph RAG**: Production-ready retrieval with FAISS/ChromaDB and knowledge graphs
 - **MCTS Planning**: Monte Carlo Tree Search for optimal experiment sequences
 - **Bayesian Design**: Expected Information Gain for experiment selection
 - **Thompson Sampling**: Efficient hypothesis space exploration
@@ -397,6 +399,120 @@ Contributions are welcome! Please:
 MIT License - see [LICENSE](LICENSE) file for details.
 
 ## 🚀 Advanced Features
+
+### RAG (Retrieval-Augmented Generation)
+
+Production-ready RAG with multiple backends and strategies:
+
+#### Traditional RAG
+
+```python
+from sciagent.rag import RAGPipeline
+
+# Initialize with FAISS (fast) or ChromaDB (persistent)
+rag = RAGPipeline(
+    embedding_model="sentence-transformers/all-MiniLM-L6-v2",
+    vector_store_type="faiss",  # or "chroma"
+    chunk_size=512,
+    chunk_overlap=50,
+)
+
+# Add documents
+documents = [
+    "Dropout prevents overfitting in neural networks...",
+    "Batch normalization improves training stability...",
+]
+rag.add_documents(documents)
+
+# Query with automatic re-ranking
+results, context = rag.query("How to prevent overfitting?", top_k=5)
+
+# Use context with LLM
+prompt = f"Question: How to prevent overfitting?\n\nContext:\n{context}\n\nAnswer:"
+```
+
+#### Graph RAG
+
+Combine knowledge graphs with RAG for relationship-aware retrieval:
+
+```python
+from sciagent.rag import GraphRAG
+from sciagent.project.knowledge_graph import ScientificKnowledgeGraph
+
+# Initialize with knowledge graph
+kg = ScientificKnowledgeGraph()
+graph_rag = GraphRAG(knowledge_graph=kg, max_hops=3)
+
+# Query with multi-hop reasoning
+results, context = graph_rag.query(
+    "What papers discuss transformer attention mechanisms?",
+    top_k=5,
+    use_multi_hop=True  # Traverse graph for complex queries
+)
+
+# Results include relationship context
+for result in results:
+    print(f"{result.node.node_type}: {result.node.content}")
+    print(f"Related nodes: {len(result.related_nodes)}")
+    print(f"Paths from query: {len(result.paths)}")
+```
+
+#### Hybrid RAG
+
+Combine traditional and graph RAG for best results:
+
+```python
+from sciagent.rag import HybridRAG
+
+hybrid = HybridRAG(
+    rag_pipeline=rag,
+    graph_rag=graph_rag,
+    combination_strategy="weighted"
+)
+
+# Weighted combination of both approaches
+results, context = hybrid.query(
+    query="Your question",
+    top_k=5,
+    rag_weight=0.6  # 60% traditional RAG, 40% graph RAG
+)
+```
+
+#### RAG Agent
+
+Easy integration with SciAgent workflows:
+
+```python
+from sciagent.agents import RAGAgent
+
+rag_agent = RAGAgent(config)
+
+# Add documents
+await rag_agent.add_documents([
+    "Document 1...",
+    "Document 2...",
+])
+
+# Query with different modes
+result = await rag_agent.query(
+    query="Your question",
+    mode="hybrid",  # "rag", "graph", or "hybrid"
+    top_k=5
+)
+
+print(result["context"])
+```
+
+**Features**:
+- **Vector Stores**: FAISS (fast), ChromaDB (persistent), or in-memory
+- **Embedding Models**: Sentence Transformers, OpenAI, or custom
+- **Chunking**: Configurable size and overlap
+- **Re-ranking**: Improved result quality
+- **Hybrid Search**: Semantic + keyword + graph structure
+- **Multi-hop**: Graph traversal for complex queries
+- **Production Ready**: Persistent, scalable, monitored
+
+See [docs/RAG_GUIDE.md](docs/RAG_GUIDE.md) for complete guide.
 
 ### Knowledge Graph
 
