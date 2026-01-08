@@ -14,6 +14,7 @@ except ImportError:
     anthropic = None
 
 from sciagent.agents.base import BaseAgent
+from sciagent.integrations.huggingface import HuggingFaceModelManager
 from sciagent.utils.config import Config
 from sciagent.utils.models import CodeArtifact, Critique, TestResult
 
@@ -41,6 +42,9 @@ class CodingAgent(BaseAgent):
         # Reflexion engine (simplified)
         self.reflexion_enabled = config.enable_reflexion
         self.max_iterations = config.reflexion_max_iterations
+
+        # Initialize HuggingFace model manager
+        self.hf_manager = HuggingFaceModelManager(cache_dir=config.cache_dir)
 
     async def process(self, request: Dict[str, Any]) -> Any:
         """
@@ -381,6 +385,13 @@ Use this data loader code:
 ```
 """
 
+        # Add HuggingFace model suggestions if applicable
+        hf_suggestions = self._get_huggingface_suggestions(plan, data_info)
+        if hf_suggestions:
+            prompt += f"""
+{hf_suggestions}
+"""
+
         prompt += """
 Requirements:
 1. Import all necessary libraries
@@ -395,6 +406,140 @@ Requirements:
 Provide complete, executable Python code."""
 
         return prompt
+
+    def _get_huggingface_suggestions(self, plan: Any, data_info: Any) -> str:
+        """
+        Get HuggingFace model suggestions based on the experiment
+
+        Args:
+            plan: Experiment plan
+            data_info: Data information
+
+        Returns:
+            Suggestion text or empty string
+        """
+        hypothesis = plan.hypothesis.statement.lower()
+        design = plan.design.description.lower()
+
+        # Detect task type from hypothesis/design
+        suggestions = []
+
+        # NLP tasks
+        if any(keyword in hypothesis or keyword in design for keyword in [
+            "text", "nlp", "language", "sentiment", "classification", "bert", "gpt",
+            "transformer", "summarization", "translation", "question", "answer"
+        ]):
+            task = None
+            models = []
+
+            if "sentiment" in hypothesis or "sentiment" in design:
+                task = "text-classification"
+                models = ["distilbert-base-uncased-finetuned-sst-2-english", "bert-base-uncased"]
+            elif "question" in hypothesis or "answer" in hypothesis:
+                task = "question-answering"
+                models = ["distilbert-base-cased-distilled-squad", "bert-large-uncased-whole-word-masking-finetuned-squad"]
+            elif "summarization" in hypothesis or "summarization" in design:
+                task = "summarization"
+                models = ["facebook/bart-large-cnn", "t5-base"]
+            elif "translation" in hypothesis or "translation" in design:
+                task = "translation"
+                models = ["t5-base", "Helsinki-NLP/opus-mt-en-de"]
+            else:
+                task = "text-classification"
+                models = ["bert-base-uncased", "distilbert-base-uncased"]
+
+            if models:
+                code_template = self.hf_manager.get_model_code_template(
+                    model_id=models[0],
+                    task=task,
+                    use_pipeline=True
+                )
+
+                suggestions.append(f"""
+HuggingFace Model Suggestions for {task}:
+Recommended models: {', '.join(models)}
+
+Example usage with pipelines:
+```python
+{code_template}
+```
+
+Alternative: Load model directly for fine-tuning:
+```python
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments
+
+model_name = "{models[0]}"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
+
+# Fine-tune as needed
+```
+""")
+
+        # Vision tasks
+        elif any(keyword in hypothesis or keyword in design for keyword in [
+            "image", "vision", "cnn", "resnet", "vit", "visual", "imagenet",
+            "object detection", "segmentation"
+        ]):
+            models = ["google/vit-base-patch16-224", "microsoft/resnet-50"]
+
+            suggestions.append(f"""
+HuggingFace Model Suggestions for computer vision:
+Recommended models: {', '.join(models)}
+
+Example usage:
+```python
+from transformers import AutoImageProcessor, AutoModelForImageClassification
+import torch
+
+processor = AutoImageProcessor.from_pretrained("{models[0]}")
+model = AutoModelForImageClassification.from_pretrained("{models[0]}")
+
+# Process images
+inputs = processor(images, return_tensors="pt")
+outputs = model(**inputs)
+predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
+```
+""")
+
+        # Multimodal tasks
+        elif any(keyword in hypothesis or keyword in design for keyword in [
+            "multimodal", "clip", "vision-language", "image-text"
+        ]):
+            models = ["openai/clip-vit-base-patch32"]
+
+            suggestions.append(f"""
+HuggingFace Model Suggestions for multimodal:
+Recommended model: {models[0]}
+
+Example usage:
+```python
+from transformers import CLIPProcessor, CLIPModel
+import torch
+
+model = CLIPModel.from_pretrained("{models[0]}")
+processor = CLIPProcessor.from_pretrained("{models[0]}")
+
+# Process image and text
+inputs = processor(text=["a photo of a cat", "a photo of a dog"], images=image, return_tensors="pt", padding=True)
+outputs = model(**inputs)
+```
+""")
+
+        # Dataset-specific suggestions
+        if data_info and "HuggingFace" in data_info.dataset_name:
+            suggestions.append(f"""
+Note: You're using a HuggingFace dataset. Consider using HuggingFace models that are commonly paired with this data:
+```python
+from datasets import load_dataset
+from transformers import AutoTokenizer, AutoModel
+
+dataset = load_dataset("{data_info.dataset_name.split(':')[-1]}")
+# Use appropriate model based on task
+```
+""")
+
+        return "\n".join(suggestions) if suggestions else ""
 
     def _extract_code(self, text: str) -> str:
         """Extract Python code from text"""

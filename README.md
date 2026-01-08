@@ -12,7 +12,7 @@ SciAgent is a production-ready system that combines cutting-edge AI techniques f
 ### Multi-Agent Architecture
 - **Science Agent (Gemini)**: Literature search, hypothesis generation, experimental design, result analysis
 - **Coding Agent (Claude)**: Code generation with Reflexion-based self-improvement and debugging
-- **Data Agent**: Automated dataset downloading and preprocessing
+- **Data Agent**: Automated dataset downloading and preprocessing with HuggingFace integration
 - **Overseer Agent (GPT-4)**: Multi-perspective validation and quality assurance
 - **RAG Agent**: Retrieval-augmented generation with document and graph-based search
 
@@ -617,6 +617,125 @@ papers = await mcp_client.call_tool(
     arguments={"query": "transformer attention", "limit": 10}
 )
 ```
+
+## 🤗 HuggingFace Integration
+
+SciAgent provides seamless integration with HuggingFace's ecosystem:
+
+### Models
+
+Access 100,000+ pre-trained models from HuggingFace Hub:
+
+```python
+from sciagent.integrations.huggingface import HuggingFaceModelManager
+
+manager = HuggingFaceModelManager()
+
+# Search for models
+models = manager.search_models("sentiment", task="text-classification", limit=5)
+
+# Create pipeline for inference
+pipe = manager.create_pipeline(
+    task="text-classification",
+    model_id="distilbert-base-uncased-finetuned-sst-2-english"
+)
+
+result = pipe("I love this product!")
+# [{'label': 'POSITIVE', 'score': 0.9998}]
+
+# Load model manually for fine-tuning
+from sciagent.integrations.huggingface.models import ModelLoadConfig
+
+config = ModelLoadConfig(
+    model_id="bert-base-uncased",
+    task="text-classification",
+    quantization="8bit",  # Optional: reduce memory
+)
+
+model_dict = manager.load_model(config)
+```
+
+### Datasets
+
+Access 50,000+ datasets from HuggingFace Datasets:
+
+```python
+from sciagent.integrations.huggingface import HuggingFaceDatasetManager
+from sciagent.integrations.huggingface.datasets import DatasetLoadConfig
+
+manager = HuggingFaceDatasetManager()
+
+# Search for datasets
+datasets = manager.search_datasets("sentiment", task="text-classification", limit=5)
+
+# Load dataset
+config = DatasetLoadConfig(dataset_id="imdb", split="train")
+dataset = manager.load_dataset(config)
+
+print(f"Loaded {len(dataset)} samples")
+# Loaded 25000 samples
+
+# Tokenize dataset
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+tokenized = manager.tokenize_dataset(
+    dataset=dataset,
+    tokenizer=tokenizer,
+    text_column="text",
+    max_length=512
+)
+
+# Create DataLoader
+from sciagent.integrations.huggingface.datasets import DataLoaderConfig
+
+dataloader = manager.create_dataloader(
+    dataset=tokenized,
+    config=DataLoaderConfig(batch_size=32, shuffle=True)
+)
+```
+
+### Integration with SciAgent
+
+Use HuggingFace datasets directly in experiments:
+
+```python
+from sciagent import SciAgent
+
+agent = SciAgent()
+
+# Use "hf:" prefix for HuggingFace datasets
+result = await agent.run("""
+Test if fine-tuning BERT improves sentiment classification:
+- Use HuggingFace IMDB dataset (hf:imdb)
+- Fine-tune bert-base-uncased
+- Compare with baseline
+- Measure accuracy and F1 score
+""", interactive=False)
+```
+
+**Automatic Model Suggestions:**
+
+SciAgent automatically suggests appropriate HuggingFace models based on your task:
+
+- **Text Classification**: distilbert, bert-base-uncased, roberta
+- **Question Answering**: distilbert-squad, bert-large-squad
+- **Summarization**: bart-large-cnn, t5-base
+- **Translation**: t5-base, opus-mt models
+- **Image Classification**: vit-base, resnet-50
+- **Vision-Language**: clip-vit-base
+
+**Features:**
+- Search and discover models and datasets
+- Pipeline API for easy inference
+- Manual loading for fine-tuning
+- Tokenization and preprocessing utilities
+- PyTorch DataLoader creation
+- Memory optimization with quantization
+- Streaming support for large datasets
+- Code template generation
+
+See [docs/HUGGINGFACE_GUIDE.md](docs/HUGGINGFACE_GUIDE.md) for complete guide and examples.
 
 ## 💻 Cursor Integration
 

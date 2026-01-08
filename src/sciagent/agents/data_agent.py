@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 from sciagent.agents.base import BaseAgent
+from sciagent.integrations.huggingface import HuggingFaceDatasetManager
+from sciagent.integrations.huggingface.datasets import DatasetLoadConfig, DataLoaderConfig
 from sciagent.utils.config import Config
 from sciagent.utils.models import DataPreparation, DatasetRequirements
 
@@ -25,6 +27,9 @@ class DataAgent(BaseAgent):
         self.cache_dir = config.data_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+        # Initialize HuggingFace dataset manager
+        self.hf_manager = HuggingFaceDatasetManager(cache_dir=self.cache_dir)
+
         # Dataset handlers registry
         self.known_datasets = {
             "cifar10": self._handle_cifar10,
@@ -34,6 +39,9 @@ class DataAgent(BaseAgent):
             "mnist": self._handle_mnist,
             "imagenet": self._handle_imagenet,
             "coco": self._handle_coco,
+            # HuggingFace datasets handler
+            "huggingface": self._handle_huggingface,
+            "hf": self._handle_huggingface,
         }
 
     async def process(self, request: Dict[str, Any]) -> Any:
@@ -414,13 +422,168 @@ num_classes = 80  # COCO has 80 object categories
         """
 
         dataset_name = dataset_info.name
+
+        # First, try to find on HuggingFace
+        self.logger.info(f"Searching HuggingFace for dataset: {dataset_name}")
+        hf_datasets = self.hf_manager.search_datasets(dataset_name, limit=5)
+
+        if hf_datasets:
+            self.logger.info(f"Found {len(hf_datasets)} datasets on HuggingFace")
+            # Use the first match
+            return await self._handle_huggingface_by_id(hf_datasets[0].dataset_id, dataset_info)
+
+        # If not found on HuggingFace, generate generic loader
         self.logger.warning(
-            f"No built-in handler for {dataset_name}, generating generic loader"
+            f"No built-in handler or HuggingFace dataset for {dataset_name}, generating generic loader"
         )
 
         cache_path = self.cache_dir / dataset_name.lower()
 
         # Generate generic loader code
+        loader_code = f"""
+# Generic data loader for {dataset_name}
+# You may need to customize this for your specific dataset
+
+import torch
+from torch.utils.data import Dataset, DataLoader
+from pathlib import Path
+
+class CustomDataset(Dataset):
+    def __init__(self, data_dir, transform=None):
+        self.data_dir = Path(data_dir)
+        self.transform = transform
+        # TODO: Implement data loading logic
+
+    def __len__(self):
+        # TODO: Return dataset size
+        return 0
+
+    def __getitem__(self, idx):
+        # TODO: Implement item loading
+        pass
+
+# Create dataset instances
+train_dataset = CustomDataset('{cache_path}/train')
+test_dataset = CustomDataset('{cache_path}/test')
+
+# Create data loaders
+train_loader = DataLoader(
+    train_dataset,
+    batch_size={dataset_info.batch_size},
+    shuffle=True,
+    num_workers={dataset_info.num_workers}
+)
+
+test_loader = DataLoader(
+    test_dataset,
+    batch_size={dataset_info.batch_size},
+    shuffle=False,
+    num_workers={dataset_info.num_workers}
+)
+"""
+
+        return DataPreparation(
+            dataset_name=dataset_name,
+            cache_path=cache_path,
+            loaders={},
+            loader_code=loader_code,
+            statistics={"note": "Generic loader - customize as needed"},
+            samples=[],
+        )
+
+    async def _handle_huggingface(
+        self, dataset_info: DatasetRequirements
+    ) -> DataPreparation:
+        """
+        Handle HuggingFace dataset by dataset_id
+
+        Expects dataset_info.name to be in format:
+        - "huggingface:dataset_id" or "hf:dataset_id"
+        - e.g., "hf:imdb" or "huggingface:squad"
+
+        Args:
+            dataset_info: Dataset requirements
+
+        Returns:
+            Data preparation result
+        """
+        # Extract dataset_id from name
+        if ":" in dataset_info.name:
+            _, dataset_id = dataset_info.name.split(":", 1)
+        else:
+            dataset_id = dataset_info.name
+
+        return await self._handle_huggingface_by_id(dataset_id, dataset_info)
+
+    async def _handle_huggingface_by_id(
+        self, dataset_id: str, dataset_info: DatasetRequirements
+    ) -> DataPreparation:
+        """
+        Handle a specific HuggingFace dataset by ID
+
+        Args:
+            dataset_id: HuggingFace dataset identifier
+            dataset_info: Dataset requirements
+
+        Returns:
+            Data preparation result
+        """
+        self.logger.info(f"Loading HuggingFace dataset: {dataset_id}")
+
+        try:
+            # Load dataset
+            load_config = DatasetLoadConfig(
+                dataset_id=dataset_id,
+                split=None,  # Load all splits
+                cache_dir=self.cache_dir,
+            )
+
+            dataset = self.hf_manager.load_dataset(load_config)
+
+            # Get dataset info
+            ds_info = self.hf_manager.get_dataset_info(dataset)
+
+            # Generate loader code
+            loader_code = self.hf_manager.get_dataset_code_template(
+                dataset_id=dataset_id,
+                split="train",
+                include_preprocessing=True,
+            )
+
+            # Extract statistics
+            statistics = {
+                "dataset_id": dataset_id,
+                "type": ds_info.get("type", "unknown"),
+            }
+
+            if "splits" in ds_info:
+                for split, info in ds_info["splits"].items():
+                    statistics[f"{split}_size"] = info["num_rows"]
+                    statistics["columns"] = info["columns"]
+
+            self.logger.info(f"Successfully loaded HuggingFace dataset: {dataset_id}")
+
+            return DataPreparation(
+                dataset_name=f"HuggingFace:{dataset_id}",
+                cache_path=self.cache_dir / dataset_id.replace("/", "_"),
+                loaders={},  # Loaders created in code
+                loader_code=loader_code,
+                statistics=statistics,
+                samples=[],
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error loading HuggingFace dataset {dataset_id}: {e}")
+            # Fall back to generic loader
+            return await self._generate_generic_loader(dataset_info)
+
+    async def _generate_generic_loader(
+        self, dataset_info: DatasetRequirements
+    ) -> DataPreparation:
+        """Generate a generic data loader"""
+        dataset_name = dataset_info.name
+        cache_path = self.cache_dir / dataset_name.lower()
+
         loader_code = f"""
 # Generic data loader for {dataset_name}
 # You may need to customize this for your specific dataset
